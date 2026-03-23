@@ -1,0 +1,7 @@
+{
+  "fields": [
+    {"from": "slug",         "to": "repo"},
+    {"from": "project.key",  "to": "project"},
+    {"from": "project.name", "to": "project_name"}
+  ]
+}

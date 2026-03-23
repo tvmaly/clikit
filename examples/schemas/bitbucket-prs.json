@@ -1,0 +1,9 @@
+{
+  "fields": [
+    {"from": "id",           "to": "id"},
+    {"from": "title",        "to": "title"},
+    {"from": "state",        "to": "state"},
+    {"from": "author.name",  "to": "author"},
+    {"from": "toRef.id",     "to": "target_branch"}
+  ]
+}

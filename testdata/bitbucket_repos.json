@@ -1,0 +1,7 @@
+{
+  "values": [
+    {"id": 1, "slug": "my-repo", "project": {"key": "PROJ", "name": "My Project"}},
+    {"id": 2, "slug": "other-repo", "project": {"key": "PROJ", "name": "My Project"}}
+  ],
+  "isLastPage": true
+}
