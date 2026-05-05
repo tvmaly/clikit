@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -19,7 +20,13 @@ import (
 )
 
 func main() {
-	fs := flag.NewFlagSet("toolkit-worker", flag.ExitOnError)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	_ = stdout
+	fs := flag.NewFlagSet("toolkit-worker", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	queueRoot := fs.String("queue-root", "", "shared drive queue root (required)")
 	handlerConfig := fs.String("handler-config", "", "handler registry config file (required)")
 	workerID := fs.String("worker-id", "", "unique worker ID (default: hostname-pid)")
@@ -29,11 +36,14 @@ func main() {
 	retentionDead := fs.Duration("retention-dead", 72*time.Hour, "dead-letter retention")
 	cleanupInterval := fs.Duration("cleanup-interval", time.Hour, "cleanup run interval")
 	verbose := fs.Bool("verbose", false, "enable debug logging")
-	fs.Parse(os.Args[1:])
+	once := fs.Bool("once", false, "validate configuration and run one dispatcher scan")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
 
 	if *queueRoot == "" || *handlerConfig == "" {
-		fmt.Fprintln(os.Stderr, "--queue-root and --handler-config are required")
-		os.Exit(1)
+		fmt.Fprintln(stderr, "--queue-root and --handler-config are required")
+		return 1
 	}
 
 	if *workerID == "" {
@@ -48,12 +58,14 @@ func main() {
 	// Load handler config.
 	hc, err := worker.LoadHandlerConfig(*handlerConfig)
 	if err != nil {
-		log.Fatalf("loading handler config: %v", err)
+		fmt.Fprintf(stderr, "loading handler config: %v\n", err)
+		return 1
 	}
 
 	// Ensure queue directories.
 	if err := filequeue.EnsureQueueDirs(*queueRoot); err != nil {
-		log.Fatalf("ensuring queue dirs: %v", err)
+		fmt.Fprintf(stderr, "ensuring queue dirs: %v\n", err)
+		return 1
 	}
 
 	// Build dispatcher.
@@ -64,6 +76,10 @@ func main() {
 		HTTPClient:   &http.Client{},
 		StaleClaim:   *staleClaim,
 		PollInterval: *pollInterval,
+	}
+	if *once {
+		d.RunOnce(context.Background())
+		return 0
 	}
 
 	// Graceful shutdown.
@@ -97,7 +113,9 @@ func main() {
 
 	log.Printf("toolkit-worker %s starting (queue: %s)", *workerID, *queueRoot)
 	if err := d.Run(ctx); err != nil && err != context.Canceled {
-		log.Fatalf("worker error: %v", err)
+		fmt.Fprintf(stderr, "worker error: %v\n", err)
+		return 1
 	}
 	log.Println("toolkit-worker stopped")
+	return 0
 }

@@ -1,0 +1,37 @@
+{
+  "schema_version": "clikit.manifest/v1",
+  "agent": "codex",
+  "tool": {
+    "name": "toolkit",
+    "description": "Agent-consumable internal CLI toolkit with compact JSON, JSONL lists, and structured errors.",
+    "command": "toolkit"
+  },
+  "permissions": ["toolkit --help", "toolkit * --help", "toolkit * list", "toolkit * inspect"],
+  "output": {
+    "default": "json",
+    "list": "jsonl",
+    "errors": "structured-json"
+  },
+  "retry_behavior": {
+    "field": "retry",
+    "true_action": "wait briefly and retry the same command",
+    "false_action": "follow the suggestion field before retrying"
+  },
+  "examples": [
+    {
+      "name": "discover",
+      "command": "toolkit --help",
+      "safety": "Read-only discovery command."
+    },
+    {
+      "name": "inspect-help",
+      "command": "toolkit repos list --help",
+      "safety": "Read-only help command."
+    }
+  ],
+  "safety_notes": [
+    "Prefer compact JSON for agent loops.",
+    "Use --pretty only for human review.",
+    "Do not expose write operations without an explicit allowlist."
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "schema_version": "clikit.manifest/v1",
+  "agent": "nanogo",
+  "tool": {
+    "name": "toolkit",
+    "description": "Read-only clikit surface for nanogo tutor/admin reporting commands.",
+    "command": "toolkit"
+  },
+  "permissions": ["toolkit --help", "toolkit nanogo --help", "toolkit nanogo tutor-status", "toolkit nanogo admin-summary"],
+  "output": {
+    "default": "json",
+    "list": "jsonl",
+    "errors": "structured-json"
+  },
+  "retry_behavior": {
+    "field": "retry",
+    "true_action": "retry read-only status commands after a short delay",
+    "false_action": "follow suggestion and avoid guessing student identifiers"
+  },
+  "examples": [
+    {
+      "name": "tutor-status",
+      "command": "toolkit nanogo tutor-status --student-id sample-student",
+      "safety": "Read-only sample command using non-production student data."
+    },
+    {
+      "name": "admin-summary",
+      "command": "toolkit nanogo admin-summary --limit 10",
+      "safety": "Read-only aggregate command with bounded output."
+    }
+  ],
+  "safety_notes": [
+    "Do not include real student data in examples or manifests.",
+    "Expose tutor, memory, scheduler, and admin data through read-only commands first.",
+    "Keep nanogo as a downstream consumer example, not a clikit dependency."
+  ]
+}

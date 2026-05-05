@@ -1,0 +1,20 @@
+{
+  "schema_version": "clikit.manifest-schema/v1",
+  "required_fields": [
+    "schema_version",
+    "agent",
+    "tool",
+    "permissions",
+    "output",
+    "retry_behavior",
+    "examples",
+    "safety_notes"
+  ],
+  "tool_fields": ["name", "description", "command"],
+  "output_defaults": {
+    "default": "json",
+    "list": "jsonl",
+    "errors": "structured-json"
+  },
+  "retry_field": "retry"
+}

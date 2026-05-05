@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +38,65 @@ func buildTestDispatcher(t *testing.T, queueRoot string, srv *httptest.Server) *
 		HTTPClient:   srv.Client(),
 		StaleClaim:   30 * time.Second,
 		PollInterval: 10 * time.Millisecond,
+	}
+}
+
+func TestDispatcher_EmitsStructuredEvents(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	root := t.TempDir()
+	filequeue.EnsureQueueDirs(root)
+	p := filequeue.QueuePaths(root)
+	id := "a1b2c3d4e5f67890"
+	writePendingRequest(t, p, id, "test", "op")
+
+	var events []Event
+	d := buildTestDispatcher(t, root, srv)
+	d.EventHook = func(e Event) {
+		events = append(events, e)
+	}
+	d.runOnce(context.Background())
+
+	want := []string{"request_claimed", "handler_selected", "http_request_started", "http_response_received", "request_completed"}
+	for _, name := range want {
+		found := false
+		for _, event := range events {
+			if event.Name == name && event.RequestID == id && event.Tool == "test" && event.Operation == "op" && event.WorkerID == "worker-test" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing event %q in %#v", name, events)
+		}
+	}
+}
+
+func TestDispatcher_LogEventJSONOmitsSecrets(t *testing.T) {
+	var buf bytes.Buffer
+	err := WriteEventJSON(&buf, Event{
+		Name:       "request_completed",
+		RequestID:  "a1b2c3d4e5f67890",
+		Tool:       "test",
+		Operation:  "op",
+		WorkerID:   "worker-test",
+		DurationMS: 12,
+		State:      "done",
+		Retry:      false,
+		ErrorClass: "none",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, `"event":"request_completed"`) || !strings.Contains(got, `"request_id":"a1b2c3d4e5f67890"`) {
+		t.Fatalf("unexpected event JSON: %q", got)
+	}
+	if strings.Contains(strings.ToLower(got), "token") || strings.Contains(strings.ToLower(got), "bearer") {
+		t.Fatalf("event JSON must not include secrets: %q", got)
 	}
 }
 

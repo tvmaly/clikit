@@ -20,76 +20,95 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: toolkit-fmt <output|error> [flags]")
-		os.Exit(1)
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) < 1 {
+		fmt.Fprintln(stderr, "usage: toolkit-fmt <output|error> [flags]")
+		return 1
 	}
 
-	switch os.Args[1] {
+	switch args[0] {
 	case "output":
-		runOutput(os.Args[2:])
+		return runOutput(args[1:], stdin, stdout)
 	case "error":
-		runError(os.Args[2:])
+		return runError(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", os.Args[1])
-		os.Exit(1)
+		fmt.Fprintf(stderr, "unknown subcommand %q\n", args[0])
+		return 1
 	}
 }
 
-func runOutput(args []string) {
-	fs := flag.NewFlagSet("output", flag.ExitOnError)
+func runOutput(args []string, stdin io.Reader, stdout io.Writer) int {
+	fs := flag.NewFlagSet("output", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	schemaPath := fs.String("schema", "", "path to schema JSON file")
 	pretty := fs.Bool("pretty", false, "pretty-print output")
-	fs.Parse(args)
+	format := fs.String("output", "json", "output format: json")
+	if err := fs.Parse(args); err != nil {
+		writeError(stdout, "parsing flags: "+err.Error(), "", false)
+		return 1
+	}
+	if *format != "json" {
+		writeError(stdout, "unsupported output format: "+*format, "use --output json", false)
+		return 1
+	}
 
-	data, err := io.ReadAll(os.Stdin)
+	data, err := io.ReadAll(stdin)
 	if err != nil {
-		writeError("reading stdin: "+err.Error(), "", false)
-		os.Exit(1)
+		writeError(stdout, "reading stdin: "+err.Error(), "", false)
+		return 1
 	}
 
 	var result any
 	if err := json.Unmarshal(data, &result); err != nil {
-		writeError("invalid JSON input: "+err.Error(), "ensure stdin is valid JSON", false)
-		os.Exit(1)
+		writeError(stdout, "invalid JSON input: "+err.Error(), "ensure stdin is valid JSON", false)
+		return 1
 	}
 
 	if *schemaPath != "" {
 		s, err := schema.LoadFile(*schemaPath)
 		if err != nil {
-			writeError("loading schema: "+err.Error(), "", false)
-			os.Exit(1)
+			writeError(stdout, "loading schema: "+err.Error(), "", false)
+			return 1
 		}
 		m, ok := result.(map[string]any)
 		if !ok {
-			writeError("schema transform requires a JSON object", "", false)
-			os.Exit(1)
+			writeError(stdout, "schema transform requires a JSON object", "", false)
+			return 1
 		}
 		result, err = schema.Transform(s, m)
 		if err != nil {
-			writeError("transforming output: "+err.Error(), "", false)
-			os.Exit(1)
+			writeError(stdout, "transforming output: "+err.Error(), "", false)
+			return 1
 		}
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(stdout)
 	if *pretty {
 		enc.SetIndent("", "  ")
 	}
-	enc.Encode(result)
+	if err := enc.Encode(result); err != nil {
+		return 1
+	}
+	return 0
 }
 
-func runError(args []string) {
-	fs := flag.NewFlagSet("error", flag.ExitOnError)
+func runError(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("error", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	message := fs.String("message", "", "error message (required)")
 	suggestion := fs.String("suggestion", "", "suggested action")
 	retry := fs.Bool("retry", false, "whether the operation can be retried")
 	exitCode := fs.Int("exit-code", 1, "exit code")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
 
 	if *message == "" {
-		fmt.Fprintln(os.Stderr, "--message is required")
-		os.Exit(1)
+		fmt.Fprintln(stderr, "--message is required")
+		return 1
 	}
 	e := &clierrors.CLIError{
 		Message:    *message,
@@ -97,11 +116,13 @@ func runError(args []string) {
 		Retry:      *retry,
 		ExitCode:   *exitCode,
 	}
-	json.NewEncoder(os.Stdout).Encode(e)
-	os.Exit(*exitCode)
+	if err := json.NewEncoder(stdout).Encode(e); err != nil {
+		return 1
+	}
+	return *exitCode
 }
 
-func writeError(message, suggestion string, retry bool) {
+func writeError(stdout io.Writer, message, suggestion string, retry bool) {
 	e := &clierrors.CLIError{Message: message, Suggestion: suggestion, Retry: retry, ExitCode: 1}
-	json.NewEncoder(os.Stdout).Encode(e)
+	json.NewEncoder(stdout).Encode(e)
 }

@@ -1,0 +1,37 @@
+{
+  "schema_version": "clikit.manifest/v1",
+  "agent": "hermes",
+  "tool": {
+    "name": "toolkit",
+    "description": "Shell-tool surface for Hermes skills that need bounded internal CLI access.",
+    "command": "toolkit"
+  },
+  "permissions": ["toolkit --help", "toolkit * --help", "toolkit * list", "toolkit * status", "toolkit * inspect"],
+  "output": {
+    "default": "json",
+    "list": "jsonl",
+    "errors": "structured-json"
+  },
+  "retry_behavior": {
+    "field": "retry",
+    "true_action": "retry after a short delay",
+    "false_action": "use suggestion to choose the next discovery command"
+  },
+  "examples": [
+    {
+      "name": "skill-discovery",
+      "command": "toolkit --help",
+      "safety": "Read-only discovery command."
+    },
+    {
+      "name": "queue-status",
+      "command": "toolkit queue status",
+      "safety": "Read-only operational status command."
+    }
+  ],
+  "safety_notes": [
+    "Hermes skills should start with discovery before execution.",
+    "Allow only listed toolkit commands in the skill permission block.",
+    "Treat request payloads and queue metadata as potentially sensitive."
+  ]
+}

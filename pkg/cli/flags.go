@@ -7,13 +7,14 @@ import (
 
 // GlobalOpts holds the global flags available on every command.
 type GlobalOpts struct {
-	Output  string // json, jsonl, pretty, table, quiet
-	Pretty  bool
-	Quiet   bool
-	Raw     bool
-	Field   string
-	Limit   int
-	Filter  string
+	Output    string // json, jsonl, pretty, table, quiet
+	Pretty    bool
+	Quiet     bool
+	Raw       bool
+	FromStdin bool
+	Field     string
+	Limit     int
+	Filter    string
 }
 
 // DefaultGlobalOpts returns GlobalOpts with default values.
@@ -30,6 +31,7 @@ func ParseGlobalFlags(args []string) (*GlobalOpts, []string, error) {
 	fs.BoolVar(&opts.Pretty, "pretty", false, "pretty-print JSON output")
 	fs.BoolVar(&opts.Quiet, "quiet", false, "output bare values only")
 	fs.BoolVar(&opts.Raw, "raw", false, "raw output, skip presentation layer")
+	fs.BoolVar(&opts.FromStdin, "from-stdin", false, "read input from stdin")
 	fs.StringVar(&opts.Field, "field", "", "extract a single field by dot-path")
 	fs.IntVar(&opts.Limit, "limit", 0, "limit number of results")
 	fs.StringVar(&opts.Filter, "filter", "", "filter results by key=value")

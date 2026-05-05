@@ -24,6 +24,34 @@ func writeResponseMeta(t *testing.T, dir, id string, completedAt time.Time) {
 	filequeue.AtomicWrite(dir, id+".meta.json", data)
 }
 
+func TestRunCleanupWithHookEmitsEvents(t *testing.T) {
+	root := t.TempDir()
+	filequeue.EnsureQueueDirs(root)
+
+	var events []Event
+	if _, err := RunCleanupWithHook(root, time.Hour, time.Hour, func(e Event) {
+		events = append(events, e)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(events))
+	for _, e := range events {
+		names = append(names, e.Name)
+	}
+	if !containsString(names, "cleanup_started") || !containsString(names, "cleanup_completed") {
+		t.Fatalf("expected cleanup events, got %#v", events)
+	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCleanup_RemovesOldDone(t *testing.T) {
 	root := t.TempDir()
 	filequeue.EnsureQueueDirs(root)

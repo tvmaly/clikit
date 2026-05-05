@@ -13,12 +13,25 @@ import (
 // RunCleanup removes expired files from done/, dead/, orphaned payloads, and tmp/.
 // Returns the count of files deleted.
 func RunCleanup(queueRoot string, doneTTL, deadTTL time.Duration) (int, error) {
+	return RunCleanupWithHook(queueRoot, doneTTL, deadTTL, nil)
+}
+
+// RunCleanupWithHook removes expired queue artifacts and emits structured
+// cleanup events when hook is non-nil.
+func RunCleanupWithHook(queueRoot string, doneTTL, deadTTL time.Duration, hook EventHook) (int, error) {
+	start := time.Now()
+	if hook != nil {
+		hook(Event{Name: "cleanup_started", State: "cleanup"})
+	}
 	p := filequeue.QueuePaths(queueRoot)
 	cleaned := 0
 
 	// Clean done/.
 	n, err := cleanMetaDir(p.Done, p.PayloadsResp, p.PayloadsReq, doneTTL)
 	if err != nil {
+		if hook != nil {
+			hook(Event{Name: "cleanup_completed", State: "error", DurationMS: durationMS(start), ErrorClass: "done_cleanup"})
+		}
 		return cleaned, fmt.Errorf("cleaning done/: %w", err)
 	}
 	cleaned += n
@@ -26,6 +39,9 @@ func RunCleanup(queueRoot string, doneTTL, deadTTL time.Duration) (int, error) {
 	// Clean dead/.
 	n, err = cleanMetaDir(p.Dead, p.PayloadsResp, p.PayloadsReq, deadTTL)
 	if err != nil {
+		if hook != nil {
+			hook(Event{Name: "cleanup_completed", State: "error", DurationMS: durationMS(start), ErrorClass: "dead_cleanup"})
+		}
 		return cleaned, fmt.Errorf("cleaning dead/: %w", err)
 	}
 	cleaned += n
@@ -33,10 +49,16 @@ func RunCleanup(queueRoot string, doneTTL, deadTTL time.Duration) (int, error) {
 	// Clean orphaned tmp/ files older than 1 hour.
 	n, err = cleanTmp(p.Tmp, time.Hour)
 	if err != nil {
+		if hook != nil {
+			hook(Event{Name: "cleanup_completed", State: "error", DurationMS: durationMS(start), ErrorClass: "tmp_cleanup"})
+		}
 		return cleaned, fmt.Errorf("cleaning tmp/: %w", err)
 	}
 	cleaned += n
 
+	if hook != nil {
+		hook(Event{Name: "cleanup_completed", State: "success", DurationMS: durationMS(start)})
+	}
 	return cleaned, nil
 }
 

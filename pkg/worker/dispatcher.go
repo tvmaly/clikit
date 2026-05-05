@@ -23,6 +23,7 @@ type Dispatcher struct {
 	HTTPClient   *http.Client
 	StaleClaim   time.Duration
 	PollInterval time.Duration
+	EventHook    EventHook
 }
 
 // Run is the main dispatch loop. It runs until ctx is cancelled.
@@ -38,6 +39,12 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 			RecoverStale(d.QueueRoot, d.StaleClaim) //nolint
 		}
 	}
+}
+
+// RunOnce performs one scan-claim-process cycle. It is primarily useful for
+// command boundary tests and operational probes.
+func (d *Dispatcher) RunOnce(ctx context.Context) {
+	d.runOnce(ctx)
 }
 
 // runOnce performs one scan-claim-process cycle over pending/.
@@ -89,6 +96,7 @@ func (d *Dispatcher) processRequest(ctx context.Context, p *filequeue.Paths, id 
 		return // another worker claimed it
 	}
 	WriteHeartbeat(p.Claimed, id, d.WorkerID) //nolint
+	d.emit(Event{Name: "request_claimed", RequestID: id, Tool: meta.Tool, Operation: meta.Operation, State: "claimed"})
 
 	// Look up handler.
 	handler, ok := d.Handlers.Lookup(meta.Tool, meta.Operation)
@@ -96,6 +104,7 @@ func (d *Dispatcher) processRequest(ctx context.Context, p *filequeue.Paths, id 
 		d.writeErrorResponse(p, id, fmt.Sprintf("no handler for tool=%q operation=%q", meta.Tool, meta.Operation), false, 404)
 		return
 	}
+	d.emit(Event{Name: "handler_selected", RequestID: id, Tool: meta.Tool, Operation: meta.Operation, State: "claimed"})
 
 	// Build URL with path params.
 	finalURL, remainingParams, err := BuildURL(handler, meta.Params)
@@ -167,12 +176,15 @@ func (d *Dispatcher) executeRequest(
 	if client == nil {
 		client = http.DefaultClient
 	}
+	d.emit(Event{Name: "http_request_started", RequestID: id, Tool: meta.Tool, Operation: meta.Operation, State: "claimed"})
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
 		d.writeErrorResponse(p, id, "http request failed: "+err.Error(), true, 0)
+		d.emit(Event{Name: "request_dead_lettered", RequestID: id, Tool: meta.Tool, Operation: meta.Operation, State: "done", Retry: true, ErrorClass: "network"})
 		return
 	}
 	defer httpResp.Body.Close()
+	d.emit(Event{Name: "http_response_received", RequestID: id, Tool: meta.Tool, Operation: meta.Operation, State: "claimed", DurationMS: durationMS(start)})
 
 	respBody, err := io.ReadAll(httpResp.Body)
 	if err != nil {
@@ -201,6 +213,7 @@ func (d *Dispatcher) executeRequest(
 			DurationMS:  dur.Milliseconds(),
 		}
 		filequeue.CompleteRequest(p, id, respBody, resp) //nolint
+		d.emit(Event{Name: "request_completed", RequestID: id, Tool: meta.Tool, Operation: meta.Operation, State: "done", DurationMS: dur.Milliseconds(), Retry: retry, ErrorClass: "http_status"})
 		return
 	}
 
@@ -214,6 +227,7 @@ func (d *Dispatcher) executeRequest(
 		DurationMS:  dur.Milliseconds(),
 	}
 	filequeue.CompleteRequest(p, id, respBody, resp) //nolint
+	d.emit(Event{Name: "request_completed", RequestID: id, Tool: meta.Tool, Operation: meta.Operation, State: "done", DurationMS: dur.Milliseconds(), ErrorClass: "none"})
 }
 
 func (d *Dispatcher) writeErrorResponse(p *filequeue.Paths, id, msg string, retry bool, statusCode int) {
@@ -228,6 +242,7 @@ func (d *Dispatcher) writeErrorResponse(p *filequeue.Paths, id, msg string, retr
 		CompletedAt: time.Now().UTC(),
 	}
 	filequeue.CompleteRequest(p, id, nil, resp) //nolint
+	d.emit(Event{Name: "request_completed", RequestID: id, State: "done", Retry: retry, ErrorClass: "worker_error"})
 }
 
 func (d *Dispatcher) writeDeadLetter(p *filequeue.Paths, id, msg string) {
@@ -242,4 +257,5 @@ func (d *Dispatcher) writeDeadLetter(p *filequeue.Paths, id, msg string) {
 		CompletedAt: time.Now().UTC(),
 	}
 	filequeue.DeadLetterRequest(p, id, resp) //nolint
+	d.emit(Event{Name: "request_dead_lettered", RequestID: id, State: "dead", ErrorClass: "malformed_request"})
 }
