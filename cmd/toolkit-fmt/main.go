@@ -19,6 +19,17 @@ import (
 	"github.com/tvmaly/clikit/pkg/schema"
 )
 
+type stringList []string
+
+func (s *stringList) String() string {
+	return fmt.Sprint([]string(*s))
+}
+
+func (s *stringList) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
@@ -102,17 +113,20 @@ func runError(args []string, stdout, stderr io.Writer) int {
 	suggestion := fs.String("suggestion", "", "suggested action")
 	retry := fs.Bool("retry", false, "whether the operation can be retried")
 	exitCode := fs.Int("exit-code", 1, "exit code")
+	var available stringList
+	fs.Var(&available, "available", "available value; may be repeated")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
 
 	if *message == "" {
-		fmt.Fprintln(stderr, "--message is required")
+		writeError(stdout, "--message is required", "provide --message with a short error summary", false)
 		return 1
 	}
 	e := &clierrors.CLIError{
 		Message:    *message,
 		Suggestion: *suggestion,
+		Available:  []string(available),
 		Retry:      *retry,
 		ExitCode:   *exitCode,
 	}

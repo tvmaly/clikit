@@ -36,7 +36,7 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			d.runOnce(ctx)
-			RecoverStale(d.QueueRoot, d.StaleClaim) //nolint
+			RecoverStaleWithHook(d.QueueRoot, d.StaleClaim, d.EventHook) //nolint
 		}
 	}
 }

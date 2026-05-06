@@ -128,6 +128,39 @@ func TestRecoverStale(t *testing.T) {
 	}
 }
 
+func TestRecoverStaleWithHookEmitsEvents(t *testing.T) {
+	root, paths := setupLeaseQueue(t)
+	id := "a1b2c3d4e5f67890"
+	// Write claimed request meta.
+	meta := &filequeue.RequestMeta{RequestID: id}
+	metaData, _ := json.Marshal(meta)
+	filequeue.AtomicWrite(paths.Claimed, id+".meta.json", metaData)
+	hb := Heartbeat{
+		WorkerID:      "worker-1",
+		ClaimedAt:     time.Now().Add(-10 * time.Minute),
+		LastHeartbeat: time.Now().Add(-10 * time.Minute),
+	}
+	data, _ := json.Marshal(hb)
+	filequeue.AtomicWrite(paths.Claimed, id+".heartbeat", data)
+
+	var events []Event
+	recovered, err := RecoverStaleWithHook(root, 5*time.Minute, func(e Event) {
+		events = append(events, e)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != 1 || recovered[0] != id {
+		t.Fatalf("expected recovered %q, got %#v", id, recovered)
+	}
+	for _, e := range events {
+		if e.Name == "stale_claim_recovered" && e.RequestID == id && e.State == "pending" {
+			return
+		}
+	}
+	t.Fatalf("expected stale_claim_recovered event, got %#v", events)
+}
+
 func TestRecoverStale_FreshSkipped(t *testing.T) {
 	root, p := setupLeaseQueue(t)
 	id := "a1b2c3d4e5f67890"

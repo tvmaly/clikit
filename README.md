@@ -17,6 +17,7 @@ clikit gives you a framework for building tools that agents understand immediate
 - **Metadata footer.** `[exit:0 | 42ms]` on every response — agents learn latency and exit status without parsing extra fields.
 - **Overflow protection.** Large responses are truncated with a spillfile path; agents get structure and can drill in rather than consuming a 200KB blob.
 - **Binary guard.** Binary output is rejected before it reaches the agent's token budget.
+- **Write once, expose many ways.** New Go tools can be defined as CLI-independent operations, then exposed through `toolkit`, Nanogo-compatible tools, manifests, and raw in-process calls.
 - **Agent manifests.** Versioned manifests describe permissions, output contracts, retry behavior, examples, and safety notes for Codex, Hermes, OpenClaw, and nanogo.
 - **Operational contracts.** Versioned JSON contracts and a file-queue operator runbook make integrations auditable instead of prose-only.
 
@@ -75,6 +76,10 @@ clikit/
 │   └── toolkit-worker/    # File-queue worker daemon (air-gapped environments)
 ├── pkg/
 │   ├── cli/               # App, Command, Context, flag parsing, help rendering
+│   ├── ops/               # CLI-independent operation metadata + raw invocation
+│   ├── opcli/             # Adapter: operations → cli.Command
+│   ├── nanogoops/         # Adapter: operations → Nanogo-compatible tools
+│   ├── tooldefs/          # Shared operation-backed example definitions
 │   ├── output/            # Binary guard, overflow, JSON/JSONL/table formatting,
 │   │                      # pipe detection, LLM presentation layer
 │   ├── errors/            # Structured CLIError with suggestion + retry
@@ -106,6 +111,19 @@ clikit/
 
 The presentation layer activates only when stdout is a terminal or an agent is reading directly. When stdout is piped (`toolkit foo | jq`), raw bytes flow through unmodified. `cli.App` wires command output through this presentation layer for direct invocation. Use `--raw` for pipe-safe output without footers, truncation messages, or presentation-only formatting.
 
+### Operation layer
+
+New Go tools should prefer `pkg/ops.Operation`. An operation is independent of CLI parsing and terminal output: it has a tool name, operation name, JSON input schema, read-only/write safety metadata, examples, safety notes, and an `Invoke(ctx,args)` function.
+
+That same operation can be exposed as:
+
+- a `toolkit <tool> <operation>` command through `pkg/opcli`
+- a Nanogo-compatible `Name/Schema/Call` tool through `pkg/nanogoops`
+- a raw in-process call through `ops.Operation.Call` or `ops.Registry.Invoke`
+- manifest permission metadata checked by `ops.ValidateManifest`
+
+Write-capable operations require explicit authorization and audit metadata before they pass validation.
+
 ### Pluggable transport
 
 Tools work identically regardless of how they reach the backend:
@@ -123,34 +141,47 @@ The CLI, progressive disclosure, output formatting, and error handling are ident
 package main
 
 import (
+    "context"
     "encoding/json"
     "os"
 
     "github.com/tvmaly/clikit/pkg/cli"
-    "github.com/tvmaly/clikit/pkg/registry"
+    "github.com/tvmaly/clikit/pkg/opcli"
+    "github.com/tvmaly/clikit/pkg/ops"
 )
 
 func main() {
-    reg := registry.New()
-    reg.Register(&cli.Command{
-        Name:  "repos",
-        Short: "List repositories",
-        Run: func(ctx *cli.Context) error {
-            items := []map[string]any{
-                {"slug": "my-repo", "project": "PLAT"},
-            }
-            enc := json.NewEncoder(ctx.Stdout)
-            for _, item := range items {
-                enc.Encode(item) // JSONL: one object per line
-            }
-            return nil
+    listRepos := ops.Operation{
+        Tool:        "repos",
+        Name:        "list",
+        Description: "List repositories",
+        InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+        ReadOnly:    true,
+        Examples:    []ops.Example{{Name: "sample", Args: json.RawMessage(`{}`)}},
+        SafetyNotes: []string{"Read-only repository listing."},
+        Invoke: func(ctx context.Context, args json.RawMessage) (*ops.Result, error) {
+            body := []byte(`[{"slug":"my-repo","project":"PLAT"}]`)
+            return &ops.Result{Body: body, StatusCode: 200, ExitCode: 0}, nil
         },
-    })
+    }
 
-    app := &cli.App{Name: "toolkit", Commands: reg.Commands()}
+    reposCmd := opcli.CommandFromOperations("repos", "Repository tools", []ops.Operation{listRepos})
+
+    app := &cli.App{Name: "toolkit", Commands: []*cli.Command{reposCmd}}
     app.Run(os.Args[1:], os.Stdout, os.Stderr)
 }
 ```
+
+The operation can also be called directly without CLI formatting:
+
+```go
+// From the same operation value used to build the CLI command:
+result, err := listRepos.Call(context.Background(), json.RawMessage(`{}`))
+_ = result.Body // compact JSON, no metadata footer
+_ = err
+```
+
+See [docs/tool-author-guide.md](docs/tool-author-guide.md) for the checklist covering schemas, read/write safety, Nanogo exposure, and manifest validation.
 
 ## Building a shell script tool
 
@@ -202,11 +233,11 @@ See [docs/runbooks/filequeue-operator-runbook.md](docs/runbooks/filequeue-operat
 **Queue inspection commands:**
 
 ```bash
-toolkit queue status                   # counts per state
-toolkit queue inspect <requestID>      # full metadata for one request
-toolkit queue retry <requestID>        # move dead-letter back to pending
-toolkit queue list --state pending     # list pending requests
-toolkit queue clean                    # run cleanup now
+toolkit queue status --queue-root /mnt/shared
+toolkit queue inspect --queue-root /mnt/shared <requestID>
+toolkit queue retry --queue-root /mnt/shared <requestID>
+toolkit queue list --queue-root /mnt/shared --state pending
+toolkit queue clean --queue-root /mnt/shared
 ```
 
 ---
@@ -240,10 +271,29 @@ toolkit <tool> --help
 toolkit <tool> <operation> --help
 ```
 
-For agent loops, keep compact JSON:
+For Claude Code, generate a bounded skill definition directly from the binary:
 
 ```bash
-toolkit repos list --output jsonl --limit 20
+toolkit skill-gen > SKILL.md
+```
+
+The generated skill tells Claude Code to discover first, parse JSON/JSONL, follow structured `suggestion` fields, and keep queue operations bounded. This is better than giving Claude a generic shell because the allowed command shape is explicit:
+
+```yaml
+allowed-tools: [Bash(toolkit *), Bash(toolkit-fmt *)]
+```
+
+For agent loops, keep compact JSON or JSONL:
+
+```bash
+toolkit example get --id abc
+toolkit example list --output jsonl
+```
+
+When Claude Code needs to parse output with no footer, use `--raw`:
+
+```bash
+toolkit --raw example get --id abc
 ```
 
 When a structured error is returned, read `retry` and `suggestion`. Retry only when `retry` is `true`; otherwise run the suggested discovery or correction command. The manifest in [manifests/codex.json](manifests/codex.json) is suitable for Codex and Claude Code-style shell-tool allowlists.
@@ -255,7 +305,7 @@ Use the Hermes skill example in [examples/agents/hermes-skill.md](examples/agent
 ```bash
 toolkit --help
 toolkit queue status --help
-toolkit queue status
+toolkit queue status --queue-root /mnt/shared/clikit
 ```
 
 Keep the Hermes permission block bounded to read-only discovery, list, status, and inspect commands until write operations have separate review. The manifest in [manifests/hermes.json](manifests/hermes.json) records the same output and retry contract in machine-readable form.
@@ -266,21 +316,81 @@ Use the OpenClaw allowlist example in [examples/agents/openclaw-skill.md](exampl
 
 ```bash
 toolkit --help
-toolkit queue inspect a1b2c3d4e5f67890
+toolkit queue inspect --queue-root /mnt/shared/clikit a1b2c3d4e5f67890
 ```
 
 Expose `toolkit` as a host tool or workspace command with an allowlist. Avoid unrestricted shell execution for internal systems. In file-queue mode, keep credentials on the `toolkit-worker` side and share only queue metadata and payload files. The machine-readable companion is [manifests/openclaw.json](manifests/openclaw.json).
 
 ### nanogo
 
-`nanogo` should consume `clikit` as a downstream read-only integration, not as a core dependency. The example in [examples/nanogo/](examples/nanogo/) demonstrates tutor/admin reporting commands:
+Nanogo can integrate with `clikit` in two ways.
+
+#### 1. Preferred: direct Go tool adapter
+
+Use `pkg/nanogoops` to adapt operation-backed tools into Nanogo's current `Name/Schema/Call` shape without shelling out or parsing terminal footers:
+
+```go
+package nanogotools
+
+import (
+    "github.com/tvmaly/clikit/pkg/nanogoops"
+    "github.com/tvmaly/clikit/pkg/tooldefs"
+)
+
+func ToolkitTools() []nanogoops.Tool {
+    ops := tooldefs.ExampleOperations()
+    tools := make([]nanogoops.Tool, 0, len(ops))
+    for _, op := range ops {
+        tools = append(tools, nanogoops.Adapt(op))
+    }
+    return tools
+}
+```
+
+Nanogo sees each adapted operation as a schema-bearing tool:
+
+```go
+tool := nanogoops.Adapt(tooldefs.ExampleOperations()[0])
+
+name := tool.Name()      // "example_get"
+schema := tool.Schema()  // JSON schema for args
+result, err := tool.Call(ctx, json.RawMessage(`{"id":"abc"}`))
+```
+
+`result` is compact JSON from the operation body. It does not include `[exit:N | Xms]`, truncation messages, or shell stderr.
+
+#### 2. Fallback: call the CLI with `--raw`
+
+For legacy tools that are only exposed through the binary, Nanogo can still call `toolkit` through its shell tool:
+
+```bash
+toolkit --raw example get --id abc
+```
+
+Use `--raw` so Nanogo receives only the JSON payload. If Nanogo is calling queue operations, pass the queue root explicitly:
+
+```bash
+toolkit --raw queue status --queue-root /mnt/shared/clikit
+toolkit --raw queue inspect --queue-root /mnt/shared/clikit a1b2c3d4e5f67890
+```
+
+#### Tutor/admin reporting pattern
+
+The example in [examples/nanogo/](examples/nanogo/) demonstrates read-only tutor/admin reporting commands:
 
 ```bash
 toolkit nanogo tutor-status --student-id sample-student
 toolkit nanogo admin-summary --limit 10
 ```
 
-Examples must use sample student identifiers and compact JSON fixtures. Keep student records, tutor memory, scheduler state, and admin data read-only until write operations have explicit authorization and audit rules. The manifest in [manifests/nanogo.json](manifests/nanogo.json) encodes those boundaries.
+For real Nanogo tutor/admin tools, define operations with:
+
+- `ReadOnly: true` for reporting commands such as tutor status, admin summary, queue status, and cost summary
+- explicit `InputSchema` for student IDs, limits, date ranges, or queue request IDs
+- sample-only examples and safety notes
+- manifest validation through `ops.ValidateManifest`
+
+Write-capable student, tutor memory, scheduler, or admin operations must set `Authorization.Required`, `Authorization.Policy`, and `Authorization.AuditEvent` before they can pass operation metadata validation. Keep those operations out of Nanogo manifests until the authorization and audit policy is reviewed.
 
 ---
 

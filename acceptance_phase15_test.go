@@ -95,6 +95,48 @@ func TestPhase15ManifestsAreMachineReadable(t *testing.T) {
 	}
 }
 
+func TestPhase15ManifestSchemaDefinesPermissionsAndOperations(t *testing.T) {
+	data, err := os.ReadFile("manifests/schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		SchemaVersion       string         `json:"schema_version"`
+		RequiredFields      []string       `json:"required_fields"`
+		ToolFields          []string       `json:"tool_fields"`
+		PermissionSemantics map[string]any `json:"permission_semantics"`
+		AllowedOperations   []string       `json:"allowed_operations"`
+		OutputDefaults      struct {
+			Default string `json:"default"`
+			List    string `json:"list"`
+			Errors  string `json:"errors"`
+		} `json:"output_defaults"`
+		RetryField string `json:"retry_field"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatalf("schema is not valid JSON: %v", err)
+	}
+	for _, want := range []string{"tool", "permissions", "output", "retry_behavior", "examples", "safety_notes"} {
+		if !contains(schema.RequiredFields, want) {
+			t.Fatalf("manifest schema missing required field %q", want)
+		}
+	}
+	for _, want := range []string{"name", "description", "command"} {
+		if !contains(schema.ToolFields, want) {
+			t.Fatalf("manifest schema missing tool field %q", want)
+		}
+	}
+	if len(schema.PermissionSemantics) == 0 || len(schema.AllowedOperations) == 0 {
+		t.Fatalf("manifest schema must document permissions and allowed operations")
+	}
+	if schema.OutputDefaults.Default != "json" || schema.OutputDefaults.List != "jsonl" || schema.OutputDefaults.Errors != "structured-json" {
+		t.Fatalf("unexpected output defaults: %+v", schema.OutputDefaults)
+	}
+	if schema.RetryField != "retry" {
+		t.Fatalf("retry field = %q", schema.RetryField)
+	}
+}
+
 func TestPhase15DocsCoverAcceptanceCriteria(t *testing.T) {
 	checks := map[string][]string{
 		"docs/contracts/json-contract-v1.md": {
@@ -142,6 +184,15 @@ func TestPhase15DocsCoverAcceptanceCriteria(t *testing.T) {
 			}
 		}
 	}
+}
+
+func contains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPhase15NanogoSampleOutputIsCompactJSON(t *testing.T) {

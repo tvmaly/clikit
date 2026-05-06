@@ -35,6 +35,47 @@ func TestRunRejectsMalformedHandlerConfig(t *testing.T) {
 	}
 }
 
+func TestRunRejectsMissingHandlerConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--queue-root", dir, "--handler-config", filepath.Join(dir, "missing.json"), "--once"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if !strings.Contains(stderr.String(), "loading handler config") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestRunRejectsHandlerConfigMissingRequiredFields(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "handlers.json")
+	if err := os.WriteFile(config, []byte(`{"handlers":[{"tool":"queue"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--queue-root", dir, "--handler-config", config, "--once"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if !strings.Contains(stderr.String(), "missing tool or operation") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestRunOnceValidatesStartupSuccess(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "handlers.json")
+	if err := os.WriteFile(config, []byte(`{"handlers":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--queue-root", dir, "--handler-config", config, "--once"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%q", code, stderr.String())
+	}
+}
+
 func TestRunRejectsInvalidDurationFlag(t *testing.T) {
 	dir := t.TempDir()
 	config := filepath.Join(dir, "handlers.json")

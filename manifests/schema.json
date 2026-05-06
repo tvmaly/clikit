@@ -11,6 +11,12 @@
     "safety_notes"
   ],
   "tool_fields": ["name", "description", "command"],
+  "permission_semantics": {
+    "format": "shell command allowlist entries",
+    "read_only_by_default": true,
+    "write_operations_require_explicit_safety_notes": true
+  },
+  "allowed_operations": ["help", "list", "status", "inspect", "read-only-example"],
   "output_defaults": {
     "default": "json",
     "list": "jsonl",

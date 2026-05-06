@@ -67,6 +67,11 @@ func IsStale(heartbeatPath string, threshold time.Duration) (bool, error) {
 // RecoverStale scans claimed/ for stale heartbeats and moves their requests
 // back to pending/. Returns the list of recovered request IDs.
 func RecoverStale(queueRoot string, threshold time.Duration) ([]string, error) {
+	return RecoverStaleWithHook(queueRoot, threshold, nil)
+}
+
+// RecoverStaleWithHook is RecoverStale with optional structured event emission.
+func RecoverStaleWithHook(queueRoot string, threshold time.Duration, hook EventHook) ([]string, error) {
 	p := filequeue.QueuePaths(queueRoot)
 	entries, err := os.ReadDir(p.Claimed)
 	if err != nil {
@@ -98,6 +103,9 @@ func RecoverStale(queueRoot string, threshold time.Duration) ([]string, error) {
 			continue
 		}
 		recovered = append(recovered, id)
+		if hook != nil {
+			hook(Event{Name: "stale_claim_recovered", RequestID: id, State: "pending", ErrorClass: "stale_claim"})
+		}
 	}
 	return recovered, nil
 }

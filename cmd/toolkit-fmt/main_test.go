@@ -66,3 +66,28 @@ func TestRunErrorWritesStructuredErrorAndExitCode(t *testing.T) {
 		t.Fatalf("expected structured error on stdout, got %q", stdout.String())
 	}
 }
+
+func TestRunErrorMissingMessageWritesStructuredError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"error"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if !strings.Contains(stdout.String(), `"error"`) || !strings.Contains(stdout.String(), "--message is required") {
+		t.Fatalf("expected structured missing-message error on stdout, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunErrorAvailableValues(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"error", "--message", "unknown project", "--available", "PLAT", "--available", "DATA"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if !strings.Contains(stdout.String(), `"available":["PLAT","DATA"]`) {
+		t.Fatalf("expected available values in structured error, got %q", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no stderr for structured error, got %q", stderr.String())
+	}
+}

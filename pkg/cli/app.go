@@ -2,11 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"time"
 
+	clierrors "github.com/tvmaly/clikit/pkg/errors"
 	"github.com/tvmaly/clikit/pkg/output"
 	"github.com/tvmaly/clikit/pkg/transport"
 )
@@ -59,7 +61,13 @@ func (a *App) Run(args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("reading stdin: %w", err)
 		}
 		if output.IsBinary(data) {
-			return fmt.Errorf("binary stdin detected: cannot process binary content with --from-stdin")
+			e := clierrors.NewWithSuggestion(
+				"binary stdin detected: cannot process binary content with --from-stdin",
+				"pass text or JSON input, or write binary content to a file and pass its path",
+				1,
+			)
+			_ = json.NewEncoder(stdout).Encode(e)
+			return e
 		}
 		stdin = bytes.NewReader(data)
 	}
@@ -98,6 +106,16 @@ func (a *App) Run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	err = cmd.Execute(ctx, remaining[1:])
+	if present && err == nil {
+		if formatted, formatErr := applyGlobalOutputOptions(outBuf.Bytes(), globalOpts); formatErr != nil {
+			err = formatErr
+			outBuf.Reset()
+			_ = json.NewEncoder(&outBuf).Encode(clierrors.NewWithSuggestion(formatErr.Error(), "check output flags and command output shape", 1))
+		} else {
+			outBuf.Reset()
+			_, _ = outBuf.Write(formatted)
+		}
+	}
 	if !present {
 		return err
 	}
@@ -132,4 +150,57 @@ func shouldPresent(stdout io.Writer, opts *GlobalOpts) bool {
 		return true
 	}
 	return !output.IsPipedWriter(stdout)
+}
+
+func applyGlobalOutputOptions(data []byte, opts *GlobalOpts) ([]byte, error) {
+	if opts == nil || len(bytes.TrimSpace(data)) == 0 {
+		return data, nil
+	}
+
+	if opts.Field != "" {
+		var v any
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("extracting field: invalid JSON output: %w", err)
+		}
+		var buf bytes.Buffer
+		if err := output.FormatField(&buf, v, opts.Field); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
+
+	if opts.Quiet || opts.Output == "quiet" {
+		return nil, fmt.Errorf("--quiet requires --field")
+	}
+
+	if opts.Pretty || opts.Output == "pretty" {
+		var v any
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("pretty output requires JSON: %w", err)
+		}
+		var buf bytes.Buffer
+		if err := output.FormatJSON(&buf, v, true); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
+
+	switch opts.Output {
+	case "", "json":
+		return data, nil
+	case "jsonl":
+		var items []any
+		if err := json.Unmarshal(data, &items); err != nil {
+			return data, nil
+		}
+		var buf bytes.Buffer
+		if err := output.FormatJSONL(&buf, items); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	case "table":
+		return data, nil
+	default:
+		return nil, fmt.Errorf("unsupported output format %q", opts.Output)
+	}
 }
